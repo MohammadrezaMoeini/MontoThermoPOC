@@ -1,0 +1,15 @@
+pytest
+click
+pylint
+pytest-cov
+panadas
+numpy
+openai
+python-dotenv
+sfepy
+openseespy
+pypop7
+stl
+numpy-stl
+gmsh
+meshio
