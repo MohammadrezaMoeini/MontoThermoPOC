@@ -21,10 +21,10 @@ ource ~/.MontoThermoPOC312/bin/activate
 # After cloning your repo on a new machine                                                                                                                                
   git clone --recurse-submodules <your-repo-url> 
 
-# Each time step we need to update the geometry
-# GCode reader: Start a simple example 
-# We need a function to get the GCode and time step and return the envlope up to that time step
-# And then we run MC for this output
+Each time step we need to update the geometry
+GCode reader: Start a simple example 
+We need a function to get the GCode and time step and return the envlope up to that time step
+And then we run MC for this output
 
 
 
