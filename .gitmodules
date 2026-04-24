@@ -1,0 +1,3 @@
+[submodule "solver/zombie"]
+	path = solver/zombie
+	url = https://github.com/rohan-sawhney/zombie.git

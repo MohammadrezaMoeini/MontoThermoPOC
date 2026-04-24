@@ -1,39 +1,30 @@
-# MecGenAI: Generative AI for Mechanical Engineering.
-This is an open source genetative AI interperter for FE simulation and optimization.
-The objective of this project is to build a platform to read and analyze the finite element method results.
+# MontoThermoPOC: 
+This is a thermal simulator by MC. 
 
 
 
 
 # Quick Start
-the first example is to run the 2D strucutre.
+First we create a Python virtual environment (on Mac/Linux):
+    python3 -m venv ~/.MontoThermoPOC
+Activate the venv:
+
+For Zombie library we need to acticate this env. 
+ource ~/.MontoThermoPOC312/bin/activate
+    
 
 
-# Examples:
-## Example 01:
-This is a very simple example of linear elastic finite element problem. The structure
-can be simply modeled by truss element in 2D. The FE model includes only 4 nodes
-and 5 element. We want to minimize the nodal displacement at node 1 and the optimization
-variable is the force angle (theta).
 
-I need a FIGURE XXXX
+# Pull latest zombie updates                                                                                                                                              
+  git submodule update --remote solver/zombie 
 
-## Example 2:
-This example is slightly more complicated truss structure. The FE model includes
-11 nodes and 19 element. The force is a vertical concentrated acted force on node 7.
-The goal is to minimize the nodal displacement at node 2 by changing the x-position
-of nodes {2, 3, 4, 8, 9, 10}.
+# After cloning your repo on a new machine                                                                                                                                
+  git clone --recurse-submodules <your-repo-url> 
 
-I need a FIGURE XXXX
-
-## Example 3:
-In this example we want to as AI, what is the best approach to optimize this truss
-structure. The objective is still to minimize the nodal displacement at node 2. Moreover, the optimization variable is also x-coordinate of the nodal position of nodes {2, 3, 4, 8, 9, 10}.
-But here, only one node's position can be changed. Wen want to find out which node
-is the best one to be optimized. We (as the user) ask this question from AI.
-
-## Example 4:
-This
+# Each time step we need to update the geometry
+# GCode reader: Start a simple example 
+# We need a function to get the GCode and time step and return the envlope up to that time step
+# And then we run MC for this output
 
 
-I need a FIGURE XXXX
+
