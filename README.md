@@ -15,6 +15,11 @@ ource ~/.MontoThermoPOC312/bin/activate
 
 
 
+# Slic3r (GCode generation)
+Slic3r is used to generate GCode from STL files. It is not included in this repo.
+Download the pre-built binary from: https://slic3r.org/download/
+Extract it into a `slicers/` folder at the repo root (already in `.gitignore`).
+
 # Pull latest zombie updates                                                                                                                                              
   git submodule update --remote solver/zombie 
 
