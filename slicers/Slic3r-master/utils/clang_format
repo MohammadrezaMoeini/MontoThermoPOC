@@ -1,8 +1,0 @@
----
-IndentWidth: '4'
-BreakBeforeBraces: 'Linux'
-ColumnLimit: '100'
-AllowAllParametersOfDeclarationOnNextLine: 'true'
-AccessModifierOffset: '-4'
-FixNamespaceComments: 'true'
-...

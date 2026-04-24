@@ -30,3 +30,6 @@ env/
 
 # Experiment development folder (not version controlled)
 experimentDev/
+
+# Slic3r binary (download separately, see README)
+slicers/
