@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Output files
+*.png
+*.gcode
+
+# Test cache
+.pytest_cache/
+.coverage
+
+# Experiment development folder (not version controlled)
+experimentDev/

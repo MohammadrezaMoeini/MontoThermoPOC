@@ -1,27 +1,4 @@
-"""
-Transient Heat Transfer – Walk on Spheres, accelerated
-=======================================================
-Three strategies applied vs the baseline:
-
-  1. Numba JIT  – compiles wos_walk to native machine code.
-                  Eliminates NumPy per-call overhead for tiny 3-vectors.
-                  Replaces np.linalg.norm / np.clip with scalar math.
-
-  2. Parallel walks – all N_WALKS for all probes dispatched as
-                  independent tasks via concurrent.futures.ProcessPoolExecutor.
-                  Each worker gets its own RNG seed so results are reproducible.
-                  (Threading doesn't help here due to Python's GIL;
-                   ProcessPool bypasses it and gives true multi-core speedup.)
-
-  3. Vectorised RNG batching inside each walk batch – pre-draw all
-                  random numbers for a block of walks at once rather than
-                  calling rng inside the JIT loop (Numba's RNG is slower
-                  than NumPy's; pre-drawing is faster).
-
-Install: pip install numpy matplotlib tqdm numba
-"""
-
-import math, time, os
+import math, time, os, json
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -30,32 +7,39 @@ from numba import njit
 import numba
 
 # ---------------------------------------------------------------------------
-# Physical / simulation parameters  (identical to baseline)
+# Load parameters from config.json (same directory as this script)
 # ---------------------------------------------------------------------------
-K_SOLID  = 0.20
-RHO      = 1200.0
-CP       = 1500.0
-ALPHA    = K_SOLID / (RHO * CP)
-H_CONV   = 10.0
-T_INF    = 25.0
-T_BOTTOM = 60.0
-T_TOP    = 200.0
-T_INIT   = 25.0
-L        = 0.01*10
+def _load_config(path=None):
+    if path is None:
+        path = os.path.join(os.path.dirname(__file__), "config.json")
+    with open(path) as f:
+        return json.load(f)
 
-DT         = 90.0
-N_STEPS    = 20*10
-N_WALKS    = int(256/1)      # can afford more walks now – costs the same wall time
-MAX_STEPS  = 512
-EPS        = 5e-4
+_cfg = _load_config()
+
+K_SOLID  = _cfg["material"]["K_SOLID"]
+RHO      = _cfg["material"]["RHO"]
+CP       = _cfg["material"]["CP"]
+ALPHA    = K_SOLID / (RHO * CP)
+H_CONV   = _cfg["boundary_conditions"]["H_CONV"]
+T_INF    = _cfg["boundary_conditions"]["T_INF"]
+T_BOTTOM = _cfg["boundary_conditions"]["T_BOTTOM"]
+T_TOP    = _cfg["boundary_conditions"]["T_TOP"]
+T_INIT   = _cfg["boundary_conditions"]["T_INIT"]
+L        = _cfg["geometry"]["L"]
+
+DT        = _cfg["simulation"]["DT"]
+N_STEPS   = _cfg["simulation"]["N_STEPS"]
+N_WALKS   = _cfg["simulation"]["N_WALKS"]
+MAX_STEPS = _cfg["simulation"]["MAX_STEPS"]
+EPS       = _cfg["simulation"]["EPS"]
 
 SIGMA_CODE = 1.0 / (ALPHA * DT) * L**2
 MU_CODE    = (H_CONV / K_SOLID) * L
 
 PROBES = {
-    "Low  (z=0.25)":  np.array([0.5, 0.5, 0.25]),
-    "Mid  (z=0.50)":  np.array([0.5, 0.5, 0.50]),
-    "High (z=0.75)":  np.array([0.5, 0.5, 0.75]),
+    name: np.array(coords, dtype=np.float64)
+    for name, coords in _cfg["probes"].items()
 }
 
 # ===========================================================================
