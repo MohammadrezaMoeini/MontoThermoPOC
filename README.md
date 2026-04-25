@@ -15,10 +15,19 @@ ource ~/.MontoThermoPOC312/bin/activate
 
 # Dependencies
 
-## Slic3r (GCode generation)
-Slic3r is used to generate GCode from STL files. It is not included in this repo.
-Download the pre-built binary from: https://slic3r.org/download/
-Extract it into a `slicers/` folder at the repo root (already in `.gitignore`).
+## GCode generator
+For the slicer i used prusaslicer. To install that: 
+    brew install --cask prusaslicer
+
+Check the installation:
+    /Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer --version
+
+Use this library with this example:
+    /Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer --export-gcode --output tests/20mmbox.gcode tests/20mmbox.stl
+
+Note that the Slic3r library needs many dependencies. According to claude: 
+"Slic3r-master is written in Perl, and it needs a module called local::lib that isn't installed on your machine".
+So I decided to use PrusaSlicer.
 
 ## Zombies
 ### Pull latest zombie updates                                                                                                                                              
@@ -33,6 +42,19 @@ Create your feature branch as feature/myfeature
 
 and then push
     git push -u origin feature/my-feature
+
+after the pr is approved and merged. Delete your branch on your local as well as on remote:
+    git branch -d feature/test_feature_branch
+    git push origin --delete feature/test_feature_branch
+
+
+# Testing
+Every class and fuctions should have the corresponding unit test. Please do note create a PR wihtout adding the related 
+unit test. 
+
+## How to run the test
+Example:
+    pytest tests/test_slicer.py -v 
 
 # Next step
 Each time step we need to update the geometry
