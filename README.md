@@ -56,7 +56,10 @@ unit test.
 Example:
     pytest tests/test_slicer.py -v 
 
-# Next step
+# Next step short term:
+Write a function for the gcode parser. Everything should be presed into a json file which will be easy to be used. 
+
+# Next step long term:
 Each time step we need to update the geometry
 GCode reader: Start a simple example 
 We need a function to get the GCode and time step and return the envlope up to that time step
