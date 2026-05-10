@@ -55,13 +55,13 @@ def plot_parser_output(moves: list[dict]) -> None:
             mx = (m['x1'] + m['x2']) / 2
             my = (m['y1'] + m['y2']) / 2
             ax.scatter(mx, my, m['z'], color=color, s=18, zorder=5)
-            ax.text(mx, my, m['z'], f" t={i}", fontsize=6, color='black')
+            ax.text(mx, my, m['z'], f" i={i}", fontsize=6, color='black')
 
     # colorbar
     sm = cm.ScalarMappable(cmap=colormap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, pad=0.1, shrink=0.6)
-    cbar.set_label("Time step (move index)", fontsize=10)
+    cbar.set_label("Move index", fontsize=10)
 
     ax.set_xlabel("X (mm)")
     ax.set_ylabel("Y (mm)")
