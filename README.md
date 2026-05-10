@@ -10,7 +10,7 @@ First we create a Python virtual environment (on Mac/Linux):
 Activate the venv:
 
 For Zombie library we need to acticate this env. 
-ource ~/.MontoThermoPOC312/bin/activate
+source ~/.MontoThermoPOC312/bin/activate
     
 
 # Dependencies

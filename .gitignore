@@ -22,14 +22,20 @@ env/
 
 # Output files
 *.png
+
+# 3D printer files
 *.gcode
+*.stl
 
 # Test cache
 .pytest_cache/
 .coverage
 
 # Experiment development folder (not version controlled)
-experimentDev/
+# experimentDev/ for now I will share this with Oliver to solve more example
 
 # Slic3r binary (download separately, see README)
 slicers/
+
+# remove pdf files
+*.pdf
