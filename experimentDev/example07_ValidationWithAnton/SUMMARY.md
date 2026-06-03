@@ -11,12 +11,18 @@ experimental thermographic data in:
 The paper provides 27 IR-measured T vs time curves at known coordinates on a
 printed PLA plate. We run our solver on the same geometry and compare.
 
-### Scope: geometry (a) only
+### Scope: geometry (a), layer 1 only
 The paper validates two geometries:
 - **(a) Regular plate** — 60 mm × 10 mm × 4 mm rectangular solid. **This is our target.**
 - **(b) Bridge-like structure** — out of scope for this example.
 
-Files for geometry (a): `tests/Anton/geometry.stl`, `tests/Anton/geometry.gcode`
+Files for geometry (a): `experimentDev/example07_ValidationWithAnton/geometry.stl`,
+`experimentDev/example07_ValidationWithAnton/geometry.gcode`
+
+**Active simulation scope**: points **#1–9 only** (layer 1, z = 0.2 mm in paper /
+z = 0.4 mm in the GCode). This is the first and most challenging layer (highest
+thermal gradients, bed contact effects). Layers 10 and 20 (points 10–27) are kept
+in `validation.py` for future use but are not simulated in `example07.py`.
 
 ---
 
@@ -24,8 +30,12 @@ Files for geometry (a): `tests/Anton/geometry.stl`, `tests/Anton/geometry.gcode`
 
 ### Geometry
 - 60 mm × 10 mm × 4 mm PLA rectangular plate
-- 20 layers × 0.2 mm layer height
-- Files: `tests/Anton/geometry.stl`, `tests/Anton/geometry.gcode`
+- Paper: 20 layers × 0.2 mm layer height
+- **GCode file (actual)**: 10 layers × 0.4 mm layer height (same total height = 4 mm)
+- GCode coordinate system: centred at plate centre (x ∈ [−4.4, 4.4] mm, y ∈ [−29.52, 29.52] mm)
+- Coordinate transform → paper-to-GCode: `x_g = x_p − 4.4`, `y_g = y_p − 29.52`
+- GCode move structure: 230 long beads (≈59 mm, E Δ≈3.93) + 220 lateral x-steps (0.4 mm, E Δ≈0.027)
+  → filter x-steps with `length < 1 mm` before simulation
 
 ### Printer / Process settings
 | Parameter | Value |
@@ -72,32 +82,48 @@ points 4 & 7 (very close to bed — strong h_b gradient).
 Instantiate `TransientThermalSolver` with the paper's measured values:
 ```python
 solver = TransientThermalSolver(
-    T_bed     = 52.0,    # T_b measured
-    T_nozzle  = 60.0,    # T_s measured at deposition (NOT 210°C set temp)
+    T_bed     = 52.0,    # T_b measured (Table 2)
+    T_nozzle  = 210.0,   # nozzle set temperature (Section 3, p.6)
     T_ambient = 20.0,
-    h         = 71.0,    # h_f free-surface
+    h         = 71.0,    # h_f free-surface convection (Table 2)
     k_cond    = 0.11,
     rho       = 1250.0,
     cp        = 1590.0,
-    dt        = 0.1,     # start here; paper uses 0.01 s
+    dt        = 0.5,
 )
 ```
+
+Note: T_s = 60°C in Table 2 is the measured temperature of the previously deposited
+layer surface — it is NOT the nozzle BC. The nozzle Dirichlet BC is 210°C.
 
 ### Step 2 — Run the Anton GCode
 Feed `tests/Anton/geometry.gcode` into `GCodeTransientSimulator`.
 Parse and inspect the file first to confirm layer height, feed rate, and
 total move count.
 
-### Step 3 — Extract T at the 27 validation coordinates
-After simulation, for each of the 27 (x, y, z) coordinates, find the
-nearest grid point and extract the full T vs time history.
-Plot side-by-side with the paper's Figure 10 curves.
+### Step 3 — Extract T at the 9 layer-1 validation coordinates
+After simulation, for each of points #1–9 (layer 1), find the nearest
+simulation grid point and extract the full T vs time history.
+Plot overlaid on subplots (a), (b), (c) of `validation.py` (Exp + FEM already there).
 
-### Step 4 — Quantitative comparison
-Compute RMS error and max error over the 27 points.
-Target: same qualitative heating/cooling shape; similar order-of-magnitude
-error to the paper's FEM (25/27 within 1 °C is ambitious given MC noise, but
-the trend should match).
+Layer-1 point coordinates in GCode space (transform: x_g = x_p − 4.4, y_g = y_p − 29.52):
+| Paper pt | x_paper | y_paper | x_gcode | y_gcode | z_gcode |
+|---|---|---|---|---|---|
+| 1 | 0.4 | 0.4  | −4.0 | −29.12 | 0.4 |
+| 2 | 0.4 | 29.6 | −4.0 |   0.08 | 0.4 |
+| 3 | 0.4 | 44.0 | −4.0 |  14.48 | 0.4 |
+| 4 | 4.0 | 0.4  | −0.4 | −29.12 | 0.4 |
+| 5 | 4.0 | 29.6 | −0.4 |   0.08 | 0.4 |
+| 6 | 4.0 | 44.0 | −0.4 |  14.48 | 0.4 |
+| 7 | 8.8 | 0.4  |  4.4 | −29.12 | 0.4 |
+| 8 | 8.8 | 29.6 |  4.4 |   0.08 | 0.4 |
+| 9 | 8.8 | 44.0 |  4.4 |  14.48 | 0.4 |
+
+### Step 4 — Quantitative comparison (layer 1 only)
+Compute RMS error and max error over points #1–9.
+Points #4 and #7 are expected to show the largest discrepancy (~24 °C) because
+they are in direct contact with the bed (h_b effect not yet modelled separately).
+Points #10–27 (layers 10 & 20) remain in `validation.py` for future extension.
 
 ---
 
@@ -105,7 +131,7 @@ the trend should match).
 
 | # | Gap | Impact | Fix needed? |
 |---|---|---|---|
-| 1 | We use T_nozzle on top face; paper uses T_s=60°C | **High** — changes absolute temp scale | Yes — use T_s=60°C |
+| 1 | Paper nozzle BC = 210°C; T_s=60°C is layer surface temp (not nozzle BC) | **Resolved** — config now uses T_nozzle=210°C | Done |
 | 2 | Single h for all surfaces; paper separates h_f / h_b | **Medium** — affects bed-contact points 4&7 | Add bottom-face Robin BC with h_b=5 |
 | 3 | No radiation BC | Low at these temps | Ignore for now |
 | 4 | Constant material properties | Low | Ignore for now |

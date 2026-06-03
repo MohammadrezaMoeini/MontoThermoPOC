@@ -47,7 +47,8 @@ class TransientThermalSolver(ThermalSolver):
                         faces:     np.ndarray,
                         n_steps:   int,
                         is_current_bead_schedule=None,
-                        T_initial=None) -> dict:
+                        T_initial=None,
+                        query_pts=None) -> dict:
         """
         Run n_steps of backward-Euler time integration on a bead mesh.
 
@@ -56,9 +57,15 @@ class TransientThermalSolver(ThermalSolver):
             False → top face cools by convection.
             Defaults to all True.
 
-        T_initial : scalar or (n_pts,) array [°C].
-            Initial temperature field. Scalar applies uniformly.
-            Defaults to T_ambient.
+        T_initial : scalar or (nx*ny*nz,) array [°C].
+            Initial temperature field on the interior grid. Scalar applies
+            uniformly. Defaults to T_ambient.
+
+        query_pts : (n_pts, 3) array [mm], optional.
+            Exact interior coordinates to evaluate. When provided, T is
+            returned at these points; the interior grid is still maintained
+            internally to supply the screened-Poisson source term.
+            Points must lie strictly inside the mesh.
 
         Returns:
             times  : (n_steps+1,) array [s]
@@ -72,35 +79,59 @@ class TransientThermalSolver(ThermalSolver):
         z_top = float(verts[:, 2].max())
         eps   = (z_top - z_bot) * 0.1
 
-        query_pts, gx, gy, gz = self._build_interior_grid(verts, z_bot, z_top)
-        n_pts = len(query_pts)
+        # The interior grid is always built: it tracks T_grid used as the
+        # source buffer (σ·T^n term) in the screened-Poisson equation.
+        grid_pts, gx, gy, gz = self._build_interior_grid(verts, z_bot, z_top)
+        n_grid = len(grid_pts)
 
-        if T_initial is None:
-            T = np.full(n_pts, self.T_ambient, dtype=np.float64)
-        elif np.isscalar(T_initial):
-            T = np.full(n_pts, float(T_initial), dtype=np.float64)
+        if query_pts is None:
+            # No custom points: solve only at grid points (existing behaviour).
+            combined_pts = grid_pts
+            n_extra      = 0
+            output_pts   = grid_pts
         else:
-            T = np.asarray(T_initial, dtype=np.float64)
-            if T.shape != (n_pts,):
+            query_pts  = np.asarray(query_pts, dtype=np.float32)
+            n_extra    = len(query_pts)
+            # Solve at grid points AND custom query points in one WoS call.
+            combined_pts = np.vstack([grid_pts, query_pts])
+            output_pts   = query_pts
+
+        n_output = len(output_pts)
+
+        # T_grid tracks the temperature at the interior grid (for source buffer).
+        if T_initial is None:
+            T_grid = np.full(n_grid, self.T_ambient, dtype=np.float64)
+        elif np.isscalar(T_initial):
+            T_grid = np.full(n_grid, float(T_initial), dtype=np.float64)
+        else:
+            T_arr = np.asarray(T_initial, dtype=np.float64)
+            if T_arr.shape == (n_grid,):
+                T_grid = T_arr
+            else:
                 raise ValueError(
-                    f"T_initial shape {T.shape} does not match grid size ({n_pts},)"
+                    f"T_initial shape {T_arr.shape} does not match grid size ({n_grid},)"
                 )
 
+        # Initial snapshot at output points (uniform at T_initial mean).
+        T_output = np.full(n_output, float(T_grid.mean()), dtype=np.float64)
+
         times     = [0.0]
-        T_history = [T.copy()]
+        T_history = [T_output.copy()]
 
         for step in range(n_steps):
             is_current = (is_current_bead_schedule[step]
                           if is_current_bead_schedule is not None else True)
-            T = self._time_step(verts, faces, query_pts, gx, gy, gz,
-                                T, z_bot, z_top, eps, bool(is_current))
+            T_all = self._time_step(verts, faces, combined_pts, gx, gy, gz,
+                                    T_grid, z_bot, z_top, eps, bool(is_current))
+            T_grid   = T_all[:n_grid]
+            T_output = T_all[n_grid:] if n_extra > 0 else T_all
             times.append((step + 1) * self.dt)
-            T_history.append(T.copy())
+            T_history.append(T_output.copy())
 
         return {
             'times':  np.array(times),
-            'T':      np.array(T_history),   # shape (n_steps+1, n_pts)
-            'points': query_pts,             # shape (n_pts, 3)
+            'T':      np.array(T_history),   # shape (n_steps+1, n_output)
+            'points': output_pts,            # shape (n_output, 3)
         }
 
     # ------------------------------------------------------------------

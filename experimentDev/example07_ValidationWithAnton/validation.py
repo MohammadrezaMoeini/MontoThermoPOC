@@ -28,6 +28,7 @@ Run with:
 """
 
 import os
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
@@ -263,15 +264,45 @@ SUBPLOTS = [
 
 COLORS = ['black', 'red', 'steelblue']   # x₂ = 0.4, 29.6, 44.0 mm
 
+# ── Monte Carlo results (layer 1 only, points #1–9) ───────────────────────────
+# Loaded from mc_results_layer1.pkl produced by example07.py.
+# Time is re-aligned to the paper's absolute print-time reference:
+#   paper t=0 aligns with the start of the first bead (pt#1 bead start).
+#   Each bead group's MC start time is shifted to match the paper's bead start.
+#
+#   Bead for pts#1-3: paper bead start = EXP_DATA[1]['t'][0] = 0.00 s
+#   Bead for pts#4-6: paper bead start = EXP_DATA[4]['t'][0] = 23.50 s
+#   Bead for pts#7-9: paper bead start = EXP_DATA[7]['t'][0] = 43.50 s
+
+MC_DATA = {}
+_mc_pkl = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mc_results_layer1.pkl')
+if os.path.exists(_mc_pkl):
+    with open(_mc_pkl, 'rb') as _f:
+        _raw = pickle.load(_f)
+    _bead_starts_mc    = {1: _raw[1]['t'][0], 4: _raw[4]['t'][0], 7: _raw[7]['t'][0]}
+    _bead_starts_paper = {1: EXP_DATA[1]['t'][0],
+                          4: EXP_DATA[4]['t'][0],
+                          7: EXP_DATA[7]['t'][0]}
+    _bead_key = {1: 1, 2: 1, 3: 1, 4: 4, 5: 4, 6: 4, 7: 7, 8: 7, 9: 7}
+    for pt_num in range(1, 10):
+        bk = _bead_key[pt_num]
+        shift = _bead_starts_mc[bk] - _bead_starts_paper[bk]
+        MC_DATA[pt_num] = {
+            't': _raw[pt_num]['t'] - shift,
+            'T': _raw[pt_num]['T'],
+        }
+
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
 def plot_figure11():
+    mc_available = bool(MC_DATA)
+    mc_label = 'Monte Carlo WoS (example07)' if mc_available else 'Monte Carlo WoS (not yet run)'
     fig, axes = plt.subplots(3, 3, figsize=(15, 11))
     fig.suptitle(
         'Figure 11 reproduction — Trofimov 2022\n'
         'Solid = Experimental (IR)   |   Dashed = FEM (ABAQUS)   |'
-        '   Dash-dot = Monte Carlo WoS  [to be added]',
+        f'   Dash-dot = {mc_label}',
         fontsize=10, y=0.995)
 
     for row, col, letter, layer, x1, pts in SUBPLOTS:
@@ -293,9 +324,12 @@ def plot_figure11():
                     color=color, lw=1.5, ls='--',
                     label=f'FEM {lbl}')
 
-            # Placeholder for Monte Carlo WoS predictions (to be added later)
-            # ax.plot(mc_t, mc_T, color=color, lw=1.5, ls='-.',
-            #         label=f'MC {lbl}')
+            # Monte Carlo WoS predictions (layer 1 only, pts #1–9)
+            if mc_available and pt_num in MC_DATA:
+                mc = MC_DATA[pt_num]
+                ax.plot(mc['t'], mc['T'],
+                        color=color, lw=1.5, ls='-.',
+                        label=f'MC {lbl}')
 
         # Annotate the known 24 °C discrepancy on subplot (c)
         if letter == '(c)':
@@ -307,7 +341,7 @@ def plot_figure11():
         ax.set_title(f'{letter}  Layer {layer},  x₁ = {x1:.1f} mm', fontsize=9)
         ax.set_xlabel('Time  [s]', fontsize=8)
         ax.set_ylabel('Temperature  [°C]', fontsize=8)
-        ax.set_ylim(50, 170)
+        ax.set_ylim(20, 170)
         ax.tick_params(labelsize=7)
         ax.legend(fontsize=6, loc='upper right', ncol=1)
         ax.grid(True, alpha=0.25)
@@ -315,13 +349,13 @@ def plot_figure11():
     # Shared legend for line styles
     leg_exp = mlines.Line2D([], [], color='gray', ls='-',  lw=1.5, label='Experimental (IR)')
     leg_fem = mlines.Line2D([], [], color='gray', ls='--', lw=1.5, label='FEM (Trofimov 2022)')
-    leg_mc  = mlines.Line2D([], [], color='gray', ls='-.', lw=1.5, label='Monte Carlo WoS (to add)')
+    leg_mc  = mlines.Line2D([], [], color='gray', ls='-.', lw=1.5, label=mc_label)
     fig.legend(handles=[leg_exp, leg_fem, leg_mc],
                loc='lower center', ncol=3, fontsize=9,
                bbox_to_anchor=(0.5, 0.0))
 
     fig.tight_layout(rect=[0, 0.04, 1, 1])
-    out_path = os.path.join(os.path.dirname(__file__), 'T_validation_exp_fem.png')
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'T_validation_exp_fem_mc.png')
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     print(f'Saved → {out_path}')
     plt.show()

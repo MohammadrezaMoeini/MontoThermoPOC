@@ -9,7 +9,7 @@
 
   "boundary": {
     "T_bed":     52.0,
-    "T_nozzle":  60.0,
+    "T_nozzle":  210.0,
     "T_ambient": 20.0,
     "h":         71.0
   },
