@@ -134,6 +134,97 @@ class TransientThermalSolver(ThermalSolver):
             'points': output_pts,            # shape (n_output, 3)
         }
 
+    def solve_incremental_deposition(self,
+                                     vertices:     np.ndarray,
+                                     faces:        np.ndarray,
+                                     n_steps:      int,
+                                     bead_y1:      float,
+                                     bead_y2:      float,
+                                     T_substrate:  float = None,
+                                     query_pts:    np.ndarray = None) -> dict:
+        """
+        Moving-nozzle deposition along the y-axis.
+
+        The nozzle travels from bead_y1 to bead_y2 in n_steps time steps.
+        At each step k the nozzle tip is at  y_tip = bead_y1 + (k+1)*dy.
+
+        Interior grid points that the nozzle has NOT yet passed are reset to
+        T_nozzle in the source buffer (freshly deposited material).  Points
+        already behind the nozzle carry their temperature from the previous
+        step and begin cooling naturally.
+
+        Returns
+        -------
+        times        : (n_steps+1,) [s]
+        T            : (n_steps+1, n_output) temperatures at output points
+        points       : (n_output, 3)
+        T_grid_final : (n_grid,) final interior-grid T (pass to solve_transient
+                       as T_initial for the subsequent cooling phase)
+        nozzle_step  : (n_output,) index k after which point j has valid
+                       (freshly deposited) data; use T[nozzle_step[j]+1:, j]
+        """
+        verts = np.asarray(vertices, dtype=np.float32)
+        faces = np.asarray(faces,    dtype=np.int32)
+
+        z_bot = float(verts[:, 2].min())
+        z_top = float(verts[:, 2].max())
+        eps   = (z_top - z_bot) * 0.1
+
+        grid_pts, gx, gy, gz = self._build_interior_grid(verts, z_bot, z_top)
+        n_grid = len(grid_pts)
+        grid_y = grid_pts[:, 1]
+
+        if query_pts is not None:
+            query_pts  = np.asarray(query_pts, dtype=np.float32)
+            n_extra    = len(query_pts)
+            combined   = np.vstack([grid_pts, query_pts])
+            output_pts = query_pts
+        else:
+            n_extra    = 0
+            combined   = grid_pts
+            output_pts = grid_pts
+        n_output = len(output_pts)
+        output_y = output_pts[:, 1]
+
+        T_sub  = float(self.T_ambient if T_substrate is None else T_substrate)
+        T_grid = np.full(n_grid,  T_sub, dtype=np.float64)
+
+        # Step when the nozzle first passes each output point (0-indexed).
+        # After this step the point has valid (freshly deposited) data.
+        bead_len = bead_y2 - bead_y1        # signed
+        nozzle_step = np.zeros(n_output, dtype=int)
+        for j in range(n_output):
+            frac = np.clip((output_y[j] - bead_y1) / bead_len, 0.0, 1.0)
+            nozzle_step[j] = max(0, int(np.ceil(frac * n_steps)) - 1)
+
+        times     = [0.0]
+        T_history = [np.full(n_output, T_sub, dtype=np.float64)]
+
+        dy = bead_len / n_steps   # signed step size along y
+
+        for k in range(n_steps):
+            y_tip_prev = bead_y1 + k * dy
+
+            # Grid points not yet deposited → reset to T_nozzle
+            not_yet = grid_y > y_tip_prev if dy >= 0 else grid_y < y_tip_prev
+            T_grid  = np.where(not_yet, self.T_nozzle, T_grid)
+
+            T_all    = self._time_step(verts, faces, combined, gx, gy, gz,
+                                       T_grid, z_bot, z_top, eps, True)
+            T_grid   = T_all[:n_grid]
+            T_output = T_all[n_grid:] if n_extra > 0 else T_all
+
+            times.append((k + 1) * self.dt)
+            T_history.append(T_output.copy())
+
+        return {
+            'times':        np.array(times),
+            'T':            np.array(T_history),   # (n_steps+1, n_output)
+            'points':       output_pts,
+            'T_grid_final': T_grid.copy(),
+            'nozzle_step':  nozzle_step,
+        }
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

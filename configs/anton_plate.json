@@ -20,9 +20,9 @@
   },
 
   "solver": {
-    "n_walks":         64,
-    "dt":              0.5,
-    "n_cooling_steps": 5,
+    "n_walks":         128,
+    "dt":              0.25,
+    "n_cooling_steps": 12,
     "grid_shape":      [4, 2, 2]
   }
 }

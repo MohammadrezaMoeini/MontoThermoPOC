@@ -279,18 +279,17 @@ _mc_pkl = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mc_results_l
 if os.path.exists(_mc_pkl):
     with open(_mc_pkl, 'rb') as _f:
         _raw = pickle.load(_f)
-    _bead_starts_mc    = {1: _raw[1]['t'][0], 4: _raw[4]['t'][0], 7: _raw[7]['t'][0]}
-    _bead_starts_paper = {1: EXP_DATA[1]['t'][0],
-                          4: EXP_DATA[4]['t'][0],
-                          7: EXP_DATA[7]['t'][0]}
-    _bead_key = {1: 1, 2: 1, 3: 1, 4: 4, 5: 4, 6: 4, 7: 7, 8: 7, 9: 7}
+    # Per-point alignment: shift each MC curve so its first time value matches
+    # the paper's first measurement time for that point.  This correctly places
+    # each curve at the moment the nozzle reached that y-position.
     for pt_num in range(1, 10):
-        bk = _bead_key[pt_num]
-        shift = _bead_starts_mc[bk] - _bead_starts_paper[bk]
-        MC_DATA[pt_num] = {
-            't': _raw[pt_num]['t'] - shift,
-            'T': _raw[pt_num]['T'],
-        }
+        if pt_num in _raw:
+            _mc_t = _raw[pt_num]['t']
+            _shift = _mc_t[0] - EXP_DATA[pt_num]['t'][0]
+            MC_DATA[pt_num] = {
+                't': _mc_t - _shift,
+                'T': _raw[pt_num]['T'],
+            }
 
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
@@ -324,12 +323,19 @@ def plot_figure11():
                     color=color, lw=1.5, ls='--',
                     label=f'FEM {lbl}')
 
-            # Monte Carlo WoS predictions (layer 1 only, pts #1–9)
+            # Monte Carlo WoS predictions (layer 1 only, pts #1–9).
+            # Clipped to the experimental time window for THIS point:
+            # material at this y-position doesn't exist before the nozzle
+            # arrives there, matching the paper's staggered curve starts.
             if mc_available and pt_num in MC_DATA:
                 mc = MC_DATA[pt_num]
-                ax.plot(mc['t'], mc['T'],
-                        color=color, lw=1.5, ls='-.',
-                        label=f'MC {lbl}')
+                t_lo = EXP_DATA[pt_num]['t'].min()
+                t_hi = EXP_DATA[pt_num]['t'].max()
+                mask = (mc['t'] >= t_lo) & (mc['t'] <= t_hi)
+                if mask.any():
+                    ax.plot(mc['t'][mask], mc['T'][mask],
+                            color=color, lw=1.5, ls='-.',
+                            label=f'MC {lbl}')
 
         # Annotate the known 24 °C discrepancy on subplot (c)
         if letter == '(c)':
@@ -341,6 +347,9 @@ def plot_figure11():
         ax.set_title(f'{letter}  Layer {layer},  x₁ = {x1:.1f} mm', fontsize=9)
         ax.set_xlabel('Time  [s]', fontsize=8)
         ax.set_ylabel('Temperature  [°C]', fontsize=8)
+        exp_t_min = min(EXP_DATA[p]['t'].min() for p in pts)
+        exp_t_max = max(EXP_DATA[p]['t'].max() for p in pts)
+        ax.set_xlim(exp_t_min, exp_t_max)
         ax.set_ylim(20, 170)
         ax.tick_params(labelsize=7)
         ax.legend(fontsize=6, loc='upper right', ncol=1)

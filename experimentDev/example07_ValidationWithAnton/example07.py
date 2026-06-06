@@ -139,25 +139,35 @@ for i, move in enumerate(layer1_beads):
     tag = f"VAL pts={pt_nums}" if is_val else "   "
     print(f"  bead {i:2d}  x={bead_x:+.1f}  {tag}", end='  ', flush=True)
 
-    # --- Deposition phase ---
-    # New beads are deposited at T_nozzle (210°C); T_ic is the substrate temp
-    # used only to carry heat forward to the next bead after cooling.
-    res_dep = solver.solve_transient(
-        verts, faces, n_dep,
-        is_current_bead_schedule=[True] * n_dep,
-        T_initial=cfg['T_nozzle'],
-        query_pts=qpts)
+    t_bead_start = t_global   # absolute time at start of this bead
 
-    t_dep_abs = t_global + res_dep['times']
+    if is_val:
+        # --- Incremental deposition (moving nozzle) for validation beads ---
+        # Each query point starts at T_nozzle the moment the nozzle reaches it;
+        # already-deposited material continues cooling naturally each step.
+        dep = solver.solve_incremental_deposition(
+            verts, faces, n_dep,
+            bead_y1=float(move['y1']), bead_y2=float(move['y2']),
+            T_substrate=T_ic,
+            query_pts=qpts)
+        T_initial_cool = dep['T_grid_final']
+    else:
+        # --- Whole-bead deposition for non-validation beads ---
+        res_dep = solver.solve_transient(
+            verts, faces, n_dep,
+            is_current_bead_schedule=[True] * n_dep,
+            T_initial=cfg['T_nozzle'],
+            query_pts=qpts)
+        T_initial_cool = float(res_dep['T'][-1].mean())
 
-    # --- Cooling phase ---
+    # --- Cooling phase (common to both paths) ---
     res_cool = solver.solve_transient(
         verts, faces, cfg['n_cooling_steps'],
         is_current_bead_schedule=[False] * cfg['n_cooling_steps'],
-        T_initial=float(res_dep['T'][-1].mean()),
+        T_initial=T_initial_cool,
         query_pts=qpts)
 
-    t_cool_abs = (t_global + n_dep * solver.dt) + res_cool['times']
+    t_cool_abs = (t_bead_start + n_dep * solver.dt) + res_cool['times']
 
     # Update global time and carry-forward IC
     t_global += (n_dep + cfg['n_cooling_steps']) * solver.dt
@@ -165,12 +175,20 @@ for i, move in enumerate(layer1_beads):
 
     print(f"T_ic→{T_ic:.1f}°C")
 
-    # Store full T history for validation beads
+    # Store per-point T history for validation beads
     if is_val:
-        T_full = np.vstack([res_dep['T'], res_cool['T'][1:]])
-        t_full = np.concatenate([t_dep_abs, t_cool_abs[1:]])
         for j, pt_num in enumerate(pt_nums):
-            val_results[pt_num] = {'t': t_full, 'T': T_full[:, j]}
+            k0 = int(dep['nozzle_step'][j])
+            # Deposition history from the step the nozzle reached this point
+            t_dep_j = t_bead_start + dep['times'][k0 + 1:]
+            T_dep_j = dep['T'][k0 + 1:, j]
+            # Cooling history (skip duplicate at t=0 of cooling)
+            t_cool_j = t_cool_abs[1:]
+            T_cool_j = res_cool['T'][1:, j]
+            val_results[pt_num] = {
+                't': np.concatenate([t_dep_j, t_cool_j]),
+                'T': np.concatenate([T_dep_j, T_cool_j]),
+            }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 
