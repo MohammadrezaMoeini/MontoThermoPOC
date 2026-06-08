@@ -292,11 +292,64 @@ if os.path.exists(_mc_pkl):
             }
 
 
-# ── Plot ──────────────────────────────────────────────────────────────────────
+# ── Plot helpers ──────────────────────────────────────────────────────────────
+
+def plot_point(pt_num):
+    """Single-subplot figure for one validation point."""
+    mc_available = pt_num in MC_DATA
+    x1c, x2c, zc = POINT_COORDS[pt_num]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    fig.suptitle(
+        f'Trofimov 2022 — Point #{pt_num}\n'
+        f'x₁ = {x1c:.1f} mm,  x₂ = {x2c:.1f} mm,  z = {zc:.1f} mm',
+        fontsize=11)
+
+    exp = EXP_DATA[pt_num]
+    ax.plot(exp['t'], exp['T'],
+            color='black', lw=1.8, ls='-', marker='o', ms=4,
+            label='Experimental (IR)')
+
+    fem = FEM_DATA[pt_num]
+    ax.plot(fem['t'], fem['T'],
+            color='steelblue', lw=1.5, ls='--',
+            label='FEM (Trofimov 2022)')
+
+    if mc_available:
+        mc = MC_DATA[pt_num]
+        t_lo = exp['t'].min()
+        t_hi = exp['t'].max()
+        mask = (mc['t'] >= t_lo) & (mc['t'] <= t_hi)
+        if mask.any():
+            ax.plot(mc['t'][mask], mc['T'][mask],
+                    color='crimson', lw=1.5, ls='-.',
+                    label='Monte Carlo WoS (example07)')
+
+    ax.set_xlabel('Time  [s]', fontsize=10)
+    ax.set_ylabel('Temperature  [°C]', fontsize=10)
+    ax.set_xlim(exp['t'].min(), exp['t'].max())
+    ax.set_ylim(20, 170)
+    ax.legend(fontsize=9, loc='upper right')
+    ax.grid(True, alpha=0.25)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    out_path = os.path.join(here, f'T_validation_pt{pt_num:02d}.png')
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    print(f'Saved → {out_path}')
+    plt.close(fig)
+
+
+def plot_layer1_pts123():
+    """Generate one figure per point for points #1, #2, #3."""
+    for pt_num in [1, 2, 3]:
+        plot_point(pt_num)
+
 
 def plot_figure11():
+    """3×3 grid reproducing Figure 11 of Trofimov 2022 (all 9 layer-1 subplots)."""
     mc_available = bool(MC_DATA)
-    mc_label = 'Monte Carlo WoS (example07)' if mc_available else 'Monte Carlo WoS (not yet run)'
+    mc_label = 'Monte Carlo WoS' if mc_available else 'Monte Carlo WoS (not yet run)'
     fig, axes = plt.subplots(3, 3, figsize=(15, 11))
     fig.suptitle(
         'Figure 11 reproduction — Trofimov 2022\n'
@@ -311,22 +364,16 @@ def plot_figure11():
             x1c, x2c, zc = POINT_COORDS[pt_num]
             lbl = f'#{pt_num}  x₂={x2c:.0f}mm'
 
-            # Experimental — solid line with small markers
             exp = EXP_DATA[pt_num]
             ax.plot(exp['t'], exp['T'],
                     color=color, lw=1.8, ls='-', marker='o', ms=3,
                     label=f'Exp {lbl}')
 
-            # FEM — dashed, same colour, no markers
             fem = FEM_DATA[pt_num]
             ax.plot(fem['t'], fem['T'],
                     color=color, lw=1.5, ls='--',
                     label=f'FEM {lbl}')
 
-            # Monte Carlo WoS predictions (layer 1 only, pts #1–9).
-            # Clipped to the experimental time window for THIS point:
-            # material at this y-position doesn't exist before the nozzle
-            # arrives there, matching the paper's staggered curve starts.
             if mc_available and pt_num in MC_DATA:
                 mc = MC_DATA[pt_num]
                 t_lo = EXP_DATA[pt_num]['t'].min()
@@ -337,7 +384,6 @@ def plot_figure11():
                             color=color, lw=1.5, ls='-.',
                             label=f'MC {lbl}')
 
-        # Annotate the known 24 °C discrepancy on subplot (c)
         if letter == '(c)':
             ax.annotate('ΔT_max ≈ 24 °C\n(Pt #7)',
                         xy=(44.3, 88), xytext=(44.55, 105),
@@ -355,9 +401,8 @@ def plot_figure11():
         ax.legend(fontsize=6, loc='upper right', ncol=1)
         ax.grid(True, alpha=0.25)
 
-    # Shared legend for line styles
-    leg_exp = mlines.Line2D([], [], color='gray', ls='-',  lw=1.5, label='Experimental (IR)')
-    leg_fem = mlines.Line2D([], [], color='gray', ls='--', lw=1.5, label='FEM (Trofimov 2022)')
+    leg_exp = mlines.Line2D([], [], color='gray', ls='-',  lw=1.5, label='Experiment')
+    leg_fem = mlines.Line2D([], [], color='gray', ls='--', lw=1.5, label='FEM (Anton 2022)')
     leg_mc  = mlines.Line2D([], [], color='gray', ls='-.', lw=1.5, label=mc_label)
     fig.legend(handles=[leg_exp, leg_fem, leg_mc],
                loc='lower center', ncol=3, fontsize=9,
@@ -371,4 +416,4 @@ def plot_figure11():
 
 
 if __name__ == '__main__':
-    plot_figure11()
+    plot_layer1_pts123()
