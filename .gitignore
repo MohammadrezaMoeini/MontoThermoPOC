@@ -22,6 +22,7 @@ env/
 
 # Output files
 *.png
+*.npz
 
 # 3D printer files
 *.gcode
