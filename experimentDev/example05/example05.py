@@ -301,5 +301,75 @@ def main():
     plt.show()
     print(f"Saved → {out_1d}")
 
+    # ── WoS vs FEM comparison (loads snapshots saved by example04) ───────────
+    wos_path = os.path.join(os.path.dirname(__file__), '..', 'example04', 'wos_snapshots.npz')
+    if not os.path.exists(wos_path):
+        print(f"WoS snapshots not found at {wos_path}. Run example04.py first.")
+        return
+
+    wos_data  = np.load(wos_path)
+    wos_dt    = float(wos_data['DT'])
+    wos_xs    = wos_data['xs']
+    wos_ys    = wos_data['ys']
+    wos_steps = sorted(int(k.split('_')[1])
+                       for k in wos_data.files if k.startswith('step_'))
+
+    # Run FEM at the same Δt and saved steps (separate from the main run above)
+    print(f"\nRunning FEM comparison at Δt={wos_dt} ...")
+    A_cmp     = M + ALPHA * wos_dt * K
+    A_cmp_mod = apply_dirichlet_rows(A_cmp, bc_indices)
+    A_cmp_lu  = spla.splu(A_cmp_mod)
+
+    u_cmp   = np.zeros(n_nodes)
+    u_cmp[bc_indices] = bc_values
+    fem_cmp = {0: u_cmp.copy()}
+    for step in range(1, max(wos_steps) + 1):
+        b = M @ u_cmp
+        b[bc_indices] = bc_values
+        u_cmp = A_cmp_lu.solve(b)
+        if step in wos_steps:
+            fem_cmp[step] = u_cmp.copy()
+        print(f"  FEM cmp step {step}/{max(wos_steps)}")
+
+    # 1D comparison plot — skip step 0 (trivially u=0)
+    plot_steps  = [s for s in wos_steps if s > 0]
+    ncols_cmp   = len(plot_steps)
+    x_cmp       = 0.5
+    i_cmp       = int(round(x_cmp * N_FEM))
+    x_a_cmp     = i_cmp / N_FEM
+    x_wos_col   = int(np.argmin(np.abs(wos_xs - x_cmp)))
+    sigma_cmp   = 1.0 / (ALPHA * wos_dt)
+
+    fig_cmp, axes_cmp = plt.subplots(1, ncols_cmp,
+                                      figsize=(4 * ncols_cmp, 4), sharey=True)
+
+    for ax, step in zip(axes_cmp, plot_steps):
+        t_val   = step * wos_dt
+        u_ana   = np.array([u_exact(x_a_cmp, yv, t_val) for yv in y_fine])
+        u_fem_l = np.array([fem_cmp[step][i_cmp * nn + j] for j in j_indices])
+        u_wos   = wos_data[f'step_{step}'][:, x_wos_col]
+
+        ax.plot(y_fine,  u_ana,   'k-',  lw=2,           label='Analytical')
+        ax.plot(y_nodes, u_fem_l, color='steelblue', lw=1.5,
+                marker='o', ms=3,                         label='FEM')
+        ax.plot(wos_ys,  u_wos,   'o',  color='tomato', ms=5, label='WoS')
+
+        ax.set_title(f't = {t_val:.2f}', fontsize=10)
+        ax.set_xlabel('y', fontsize=10)
+        ax.set_xlim(0, 1)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+    axes_cmp[0].set_ylabel(f'u(x={x_a_cmp:.3f},  y,  t)', fontsize=10)
+    fig_cmp.suptitle(
+        f'WoS (example04) vs FEM (example05) vs Analytical\n'
+        f'1D profile at x={x_a_cmp:.3f}  |  backward Euler  Δt={wos_dt},  σ={sigma_cmp:.1f}',
+        fontsize=11)
+    plt.tight_layout()
+    out_cmp = os.path.join(os.path.dirname(__file__), 'wos_vs_fem.png')
+    plt.savefig(out_cmp, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f'Saved → {out_cmp}')
+
 
 main()

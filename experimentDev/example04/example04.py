@@ -37,13 +37,15 @@ EPS       = 1e-3
 N_GRID    = 20         # N_GRID × N_GRID interior evaluation points
 
 ALPHA   = 1.0          # thermal diffusivity (normalised, arbitrary units)
-DT      = 0.02         # time step
-N_STEPS = 20           # t_final = 0.40
+DT      = 0.5          # time step  (σ = 1/(α·Δt) = 2 — small enough for WoS)
+N_STEPS = 6            # t_final = 3.0  (well past the transient τ ≈ 0.05)
 SIGMA   = 1.0 / (ALPHA * DT)   # screened-Poisson / Yukawa coefficient
 
 # With α=1, fundamental decay τ = 1/(α·π²·2) ≈ 0.051
-# Saved times: 0, 0.02, 0.04, 0.08, 0.16, 0.40 — span most of the transient
-SAVE_AT = {0, 1, 2, 4, 8, 20}   # steps whose snapshots will be plotted
+# Keeping σ = 1/(α·Δt) ≤ 2 is required for WoS: boundary influence on interior
+# points scales as exp(−√σ·dist), which is undetectable for σ=50 (old Δt=0.02).
+# Saved times: 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0 — span the full transient
+SAVE_AT = {0, 1, 2, 3, 4, 6}   # steps whose snapshots will be plotted
 
 # ── Analytical steady-state solution (same Fourier series as example02) ───────
 def u_steady(x, y, n_terms=40):
@@ -356,6 +358,14 @@ def main():
     plt.savefig(out_path_1d, dpi=150, bbox_inches="tight")
     plt.show()
     print(f"Saved → {out_path_1d}")
+
+    # ── Save snapshots for comparison in example05 ────────────────────────────
+    save_dict = {'xs': xs, 'ys': ys, 'DT': np.float64(DT)}
+    for step in sorted(snapshots.keys()):
+        save_dict[f'step_{step}'] = snapshots[step]
+    out_npz = os.path.join(os.path.dirname(__file__), 'wos_snapshots.npz')
+    np.savez(out_npz, **save_dict)
+    print(f"WoS snapshots saved → {out_npz}")
 
 
 main()
