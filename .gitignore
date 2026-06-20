@@ -40,3 +40,6 @@ slicers/
 
 # remove pdf files
 *.pdf
+
+# WIP
+experimentDev/_example*/

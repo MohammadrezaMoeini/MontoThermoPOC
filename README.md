@@ -61,6 +61,7 @@ The solution is visualised at three horizontal slices ($z = 0.25$, $0.50$, $0.75
 
 
 ## Example 04: 
+
 In this example, the transient heat equation was solved on $[0,1]^2$ using the zombie Walk-on-Stars library with a backward Euler time discretisation.
 
 ### PDE & B.C.
@@ -154,90 +155,6 @@ where $M$ is the consistent mass matrix and $K$ is the stiffness matrix assemble
 
 ![Example 5 — WoS vs FEM comparison](experimentDev/example05/wos_vs_fem.png)
 * Example 5: WoS (example04) vs FEM vs Analytical — 1D profile at $x=0.5$, backward Euler $\Delta t=0.5$, $\sigma=2$
-
-
-## Example 06: <span style="color: red;">Wrong!</span> 
-This example applies the transient thermal solver to a real G-code print job (a 20 mm box). It tracks the temperature history at **three vertical positions** inside a single bead — bottom, middle, and top — to visualise the vertical thermal gradient during deposition and cooling.
-
-### Setup
-
-The simulation uses the `GCodeTransientSimulator` which parses the G-code, builds a bead mesh for each move, and calls `TransientThermalSolver` with a `(1, 1, 3)` grid (one $x$-, one $y$-, three $z$-points). The longest bead from the first 30 moves is selected for analysis.
-
-**Material / boundary parameters:**
-
-| Parameter    | Value      |
-|--------------|------------|
-| T nozzle     | 200 °C     |
-| T bed        | 60 °C      |
-| T ambient    | 20 °C      |
-| h            | 25 W/m²K   |
-| k            | 0.2 W/mK   |
-| rho          | 1240 kg/m³ |
-| cp           | 1800 J/kgK |
-| dt           | 0.2 s      |
-
-### Output
-
-The full thermal history (deposition phase + 15 cooling steps) is plotted for each of the three $z$-points. The nozzle-top point heats rapidly and then drops sharply once the nozzle leaves; the bed-bottom point stays close to $T_\text{bed}$ throughout.
-
-![Example 6 — Temperature vs time](experimentDev/example06/T_vs_time.png)
-* Example 6: Temperature vs time at z_bottom, z_middle, and z_top inside a bead
-
-
-## Example 07: Validation against Trofimov 2022 <span style="color: red;">Wrong!</span>
-
-This example validates the `TransientThermalSolver` against the experimental IR thermography data published in:
-
-> Trofimov, A. et al. (2022). *Experimentally validated modeling of temperature distribution during FFF.*
-
-The paper provides 27 measured T vs time curves at known coordinates on a printed PLA plate. The solver is run on the same geometry (geometry a — 60 × 10 × 4 mm regular plate) and the predictions at the 9 layer-1 validation points (#1–9) are compared against the experimental and FEM reference curves.
-
-### Geometry & coordinate transform
-
-The GCode file uses a centred coordinate system. Paper coordinates are transformed as:
-
-$$
-x_\text{gcode} = x_\text{paper} - 4.4 \qquad y_\text{gcode} = y_\text{paper} - 29.52
-$$
-
-Layer 1 validation points sit at $z = 0.2$ mm (mid-layer).
-
-| Point | Bead x (gcode) | y (gcode) |
-|-------|----------------|-----------|
-| #1    | −4.0 mm        | −29.12 mm |
-| #2    | −4.0 mm        |   0.08 mm |
-| #3    | −4.0 mm        |  14.48 mm |
-| #4–6  | −0.4 mm        | same y    |
-| #7–9  | +4.4 mm        | same y    |
-
-### Material & solver parameters (Trofimov 2022, Table 2)
-
-| Parameter        | Value      |
-|------------------|------------|
-| T nozzle         | 210 °C     |
-| T bed            | 52 °C      |
-| T ambient        | 20 °C      |
-| h (free surface) | 71 W/m²K   |
-| k                | 0.11 W/mK  |
-| rho              | 1250 kg/m³ |
-| cp               | 1590 J/kgK |
-
-### Method
-
-All 23 layer-1 beads are simulated in sequence. For the three validation beads the moving-nozzle `solve_incremental_deposition` is used so each query point receives $T_\text{nozzle}$ exactly when the nozzle passes over it. The mean grid temperature is carried forward as the initial condition between beads.
-
-### Output
-
-![Example 7 — MC vs Exp vs FEM](experimentDev/example07_ValidationWithAnton/T_validation_exp_fem_mc.png)
-* Example 7: MC WoS prediction vs experimental IR data vs FEM reference at layer-1 points #1–9
-
-The convergence studies (n_walks and dt) for point #1 are also included:
-
-![Example 7 — n_walks convergence](experimentDev/example07_ValidationWithAnton/convergence_nwalks_pt01.png)
-* Example 7: MC temperature vs n_walks at t = 0.5 s after nozzle arrival (point #1)
-
-![Example 7 — dt convergence](experimentDev/example07_ValidationWithAnton/convergence_dt_pt01.png)
-* Example 7: MC temperature vs dt at point #1 (n_walks = 512)
 
 
 
