@@ -1,84 +1,59 @@
 """
-Example 04: Transient heat equation on [0,1]² — Zombie Walk-on-Stars
+Example 04: Transient heat equation on [0,1]² — Finite Element Method (P1 triangles)
+
+Same problem as Example 03 (WoS), solved deterministically with FEM.
 
 PDE:  ∂u/∂t = α ∇²u          on  Ω = [0,1]²
 BC:   u = 1  (top,  y = 1),   u = 0  (bottom, left, right)
 IC:   u(x, y, 0) = 0
 
 Time discretisation: backward Euler
-    (u^{n+1} − u^n) / Δt = α ∇²u^{n+1}
-  ⟹  ∇²u^{n+1} − σ u^{n+1} = −σ u^n      σ = 1/(αΔt)
+    M u^{n+1} + α Δt K u^{n+1} = M u^n
+    ⟹  A u^{n+1} = b^n     where  A = M + α Δt K
 
-Zombie solves the screened-Poisson (Yukawa) equation:
-    Δu − λ u = −f
-Setting  λ = σ  and  f = σ·u^n  gives the correct backward-Euler step.
+Spatial discretisation: P1 (linear) triangular FEM on a uniform structured mesh.
+Each unit square is split into two right triangles along the diagonal.
 
-At steady state (u^{n+1} ≈ u^n) the equation collapses to ∇²u = 0,
-which is the example02 Laplace solution.
+Dirichlet BCs are enforced by replacing BC rows with identity equations.
+The system matrix is constant across time steps → LU-factored once for speed.
 
 Run with:
     source ~/.MontoThermoPOC312/bin/activate
-    python experimentDev/example04/example04.py
+    python experimentDev/example05/example05.py
 """
 
 import math
 import os
-import tempfile
 import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
-import zombie
 
 # ── Simulation parameters ─────────────────────────────────────────────────────
-DIM       = 2
-CHANNELS  = 1
-N_WALKS   = 2000        # Monte-Carlo walks per interior point per time step
-MAX_STEPS = 1024
-EPS       = 1e-3
-N_GRID    = 20         # N_GRID × N_GRID interior evaluation points
+ALPHA   = 1.0          # thermal diffusivity
+DT      = 0.02         # time step  (same as example04)
+N_STEPS = 20           # t_final = 0.40
+N_FEM   = 50           # n×n sub-squares → (n+1)² nodes, 2n² triangles
 
-ALPHA   = 1.0          # thermal diffusivity (normalised, arbitrary units)
-DT      = 0.5          # time step  (σ = 1/(α·Δt) = 2 — small enough for WoS)
-N_STEPS = 6            # t_final = 3.0  (well past the transient τ ≈ 0.05)
-SIGMA   = 1.0 / (ALPHA * DT)   # screened-Poisson / Yukawa coefficient
+SAVE_AT = {0, 1, 2, 4, 8, 20}   # same save points as example04
 
-# With α=1, fundamental decay τ = 1/(α·π²·2) ≈ 0.051
-# Keeping σ = 1/(α·Δt) ≤ 2 is required for WoS: boundary influence on interior
-# points scales as exp(−√σ·dist), which is undetectable for σ=50 (old Δt=0.02).
-# Saved times: 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0 — span the full transient
-SAVE_AT = {0, 1, 2, 3, 4, 6}   # steps whose snapshots will be plotted
-
-# ── Analytical steady-state solution (same Fourier series as example02) ───────
+# ── Analytical solution (identical to example04) ──────────────────────────────
 def u_steady(x, y, n_terms=40):
     total = 0.0
     for k in range(n_terms):
-        n = 2*k + 1
+        n = 2 * k + 1
         total += (4.0 / (n * math.pi)) * math.sin(n * math.pi * x) \
                  * math.sinh(n * math.pi * y) / math.sinh(n * math.pi)
     return total
 
-# ── Full transient analytical solution ────────────────────────────────────────
-# Decompose: u = u_s + v  where v satisfies homogeneous BCs and v(x,y,0) = -u_s.
-#
-# Eigenfunctions for homogeneous Dirichlet BCs: sin(mπx) sin(nπy)
-# Eigenvalues: λ_mn = π²(m²+n²)
-#
-# Projecting -u_s onto the eigenbasis gives C_mn (only odd m are non-zero):
-#   C_mn = 8·(-1)^n · n / (m·π²·(m²+n²))     m = 1,3,5,…   n = 1,2,3,…
-#
-# Full solution:
-#   u(x,y,t) = u_s(x,y)
-#             + Σ_{m odd} Σ_{n≥1} C_mn · sin(mπx)·sin(nπy)·exp(−α π²(m²+n²) t)
 def u_exact(x, y, t, n_terms_m=15, n_terms_n=30):
-    """Analytical solution valid for all t ≥ 0."""
-    # Steady-state part (converges quickly at all t)
     total = u_steady(x, y, n_terms=n_terms_m)
-    # Transient correction (decays exponentially; needs more n-terms than m-terms)
     pi2 = math.pi ** 2
     for ki in range(n_terms_m):
-        m = 2 * ki + 1   # odd m only
+        m = 2 * ki + 1
         for n in range(1, n_terms_n + 1):
             decay = math.exp(-ALPHA * pi2 * (m * m + n * n) * t)
-            if decay < 1e-14:   # negligible — skip remaining n for this m
+            if decay < 1e-14:
                 break
             sign  = (-1) ** n
             coeff = 8.0 * sign * n / (m * pi2 * (m * m + n * n))
@@ -86,203 +61,170 @@ def u_exact(x, y, t, n_terms_m=15, n_terms_n=30):
                            * math.sin(n * math.pi * y) * decay
     return total
 
-# ── Unit-square boundary mesh ─────────────────────────────────────────────────
-def build_unit_square_obj(n_per_edge=20):
-    corners = [(0.0,0.0),(1.0,0.0),(1.0,1.0),(0.0,1.0)]
-    vertices, edges = [], []
-    for k in range(4):
-        p0 = np.array(corners[k]); p1 = np.array(corners[(k+1)%4])
-        base = len(vertices)
-        for i in range(n_per_edge):
-            vertices.append(p0 + (i / n_per_edge) * (p1 - p0))
-        for i in range(n_per_edge - 1):
-            edges.append((base+i, base+i+1))
-        edges.append((base + n_per_edge - 1, ((k+1) % 4) * n_per_edge))
-    path = os.path.join(tempfile.gettempdir(), "unit_square.obj")
-    with open(path, "w") as f:
-        for v in vertices: f.write(f"v {v[0]:.6f} {v[1]:.6f}\n")
-        for e in edges:    f.write(f"l {e[0]+1} {e[1]+1}\n")
-    return path
-
-# ── Dirichlet BC grid: u=1 at top (y=1), u=0 elsewhere ───────────────────────
-def build_dirichlet_grid(res=128):
-    shape  = np.array([res, res], dtype=np.int32)
-    buffer = np.zeros(res * res, dtype=np.float32)
-    for xi in range(res):
-        buffer[xi * res + (res - 1)] = 1.0   # yi = res-1 → y = 1 → u = 1
-    return buffer, shape
-
-# ── Source buffer: f = σ · u^n  on a full (M×M) grid ─────────────────────────
-def build_source_buffer(u_current):
+# ── Mesh ──────────────────────────────────────────────────────────────────────
+def build_mesh(n):
     """
-    u_current : shape (N_GRID, N_GRID),  layout [row = y_idx, col = x_idx].
-
-    Returns a flat float32 buffer with shape M × M  (M = N_GRID + 2)
-    that covers [0,1]² uniformly — interior values come from u_current,
-    boundary values are the Dirichlet BCs (u=1 at top, u=0 elsewhere).
-
-    Buffer layout (same convention as build_dirichlet_grid):
-        buffer[xi * M + yi],  xi = x-index,  yi = y-index.
+    Uniform n×n mesh on [0,1]².
+    Nodes: node(i,j) = i*(n+1)+j  with coordinates (i/n, j/n).
+    Triangles: each square split along the SW–NE diagonal into two triangles.
+    Returns x_coords, y_coords (length (n+1)²) and triangles (2n², 3).
     """
-    M = N_GRID + 2
-    u_full = np.zeros((M, M), dtype=np.float32)  # [xi, yi]
-    u_full[:, M - 1] = 1.0   # top edge (y = 1) → u = 1
+    h = 1.0 / n
+    n_nodes = (n + 1) ** 2
+    x_coords = np.empty(n_nodes)
+    y_coords = np.empty(n_nodes)
+    for i in range(n + 1):
+        for j in range(n + 1):
+            idx = i * (n + 1) + j
+            x_coords[idx] = i * h
+            y_coords[idx] = j * h
 
-    # Map interior: u_current[y_idx, x_idx] → u_full[x_idx+1, y_idx+1]
-    for y_idx in range(N_GRID):
-        for x_idx in range(N_GRID):
-            u_full[x_idx + 1, y_idx + 1] = float(u_current[y_idx, x_idx])
+    tri_list = []
+    for i in range(n):
+        for j in range(n):
+            bl = i * (n + 1) + j
+            br = (i + 1) * (n + 1) + j
+            tr = (i + 1) * (n + 1) + (j + 1)
+            tl = i * (n + 1) + (j + 1)
+            tri_list.append([bl, br, tr])   # lower triangle
+            tri_list.append([bl, tr, tl])   # upper triangle
 
-    # Zombie solves Δu − λu = −f, so we pass f = σ·u^n (positive)
-    source = (SIGMA * u_full).flatten().astype(np.float32)
-    return source, np.array([M, M], dtype=np.int32)
+    return x_coords, y_coords, np.array(tri_list, dtype=np.int32)
 
-# ── One-time geometry / geometric-queries setup ───────────────────────────────
-def setup_geometry(domain_min, domain_max):
+# ── FEM assembly ──────────────────────────────────────────────────────────────
+def assemble(x_coords, y_coords, triangles):
     """
-    Returns (geometric_queries, dirichlet_handler, neumann_handler).
+    Assemble global stiffness K and consistent mass M matrices.
 
-    IMPORTANT: the two handlers MUST be kept alive (held in a variable) for as
-    long as geometric_queries is used.  populate_geometric_queries_* stores raw
-    C++ pointers into the handlers' BVH data; if the handlers are garbage-
-    collected the pointers dangle and the process crashes with SIGSEGV.
+    Local stiffness:  K_ab = area * dot(∇φ_a, ∇φ_b)
+    Local mass:       M_ab = area/12 * (1 + δ_ab)    (consistent mass matrix)
     """
-    obj_path  = build_unit_square_obj(n_per_edge=20)
-    positions = zombie.FloatNList(dim=DIM)
-    indices   = zombie.IntNList(dim=DIM)
-    zombie.Utils.load_boundary_mesh(obj_path, positions, indices, dim=DIM)
-    zombie.Utils.flip_orientation(indices, dim=DIM)
+    n_nodes = len(x_coords)
+    n_tri   = len(triangles)
 
-    geometric_queries = zombie.Core.GeometricQueries(
-        True, domain_min, domain_max, dim=DIM)
+    # Pre-allocate COO arrays: 9 entries per triangle for each matrix
+    rows = np.empty(9 * n_tri, dtype=np.int32)
+    cols = np.empty(9 * n_tri, dtype=np.int32)
+    kvals = np.empty(9 * n_tri)
+    mvals = np.empty(9 * n_tri)
 
-    dirichlet_handler = zombie.Utils.FcpwDirichletBoundaryHandler(dim=DIM)
-    dirichlet_handler.build_acceleration_structure(positions, indices)
-    zombie.Utils.populate_geometric_queries_for_dirichlet_boundary(
-        dirichlet_handler, geometric_queries, dim=DIM)
+    ptr = 0
+    for tri in triangles:
+        a, b, c = tri
+        xa, ya = x_coords[a], y_coords[a]
+        xb, yb = x_coords[b], y_coords[b]
+        xc, yc = x_coords[c], y_coords[c]
 
-    empty_pos = zombie.FloatNList(dim=DIM)
-    empty_idx = zombie.IntNList(dim=DIM)
-    neumann_handler = zombie.Utils.FcpwNeumannBoundaryHandler(dim=DIM)
-    neumann_handler.build_acceleration_structure(
-        empty_pos, empty_idx,
-        zombie.Utils.get_ignore_candidate_silhouette_callback(False))
-    zombie.Utils.populate_geometric_queries_for_neumann_boundary(
-        neumann_handler, zombie.Utils.get_branch_traversal_weight_callback(),
-        geometric_queries, dim=DIM)
+        # Signed area (triangles are CCW by construction)
+        area = 0.5 * ((xb - xa) * (yc - ya) - (xc - xa) * (yb - ya))
 
-    return geometric_queries, dirichlet_handler, neumann_handler
+        # Gradients of shape functions (constant on P1 element)
+        inv2A = 0.5 / area
+        grads = np.array([
+            [(yb - yc) * inv2A, (xc - xb) * inv2A],
+            [(yc - ya) * inv2A, (xa - xc) * inv2A],
+            [(ya - yb) * inv2A, (xb - xa) * inv2A],
+        ])
 
-# ── Build PDE object for the current time step ────────────────────────────────
-def build_pde(u_current, domain_min, domain_max, dirichlet_buffer, dirichlet_shape):
-    source_buf, source_shape = build_source_buffer(u_current)
+        nodes = [a, b, c]
+        for ii in range(3):
+            for jj in range(3):
+                rows[ptr] = nodes[ii]
+                cols[ptr] = nodes[jj]
+                kvals[ptr] = area * np.dot(grads[ii], grads[jj])
+                mvals[ptr] = area / 12.0 * (2.0 if ii == jj else 1.0)
+                ptr += 1
 
-    pde = zombie.Core.PDE(dim=DIM, channels=CHANNELS)
-    pde.absorption_coeff                  = SIGMA
-    pde.are_robin_conditions_pure_neumann = True
-    pde.are_robin_coeffs_nonnegative      = True
-    pde.source = zombie.Utils.get_dense_grid_source_callback(
-        source_buf, source_shape, domain_min, domain_max,
-        dim=DIM, channels=CHANNELS)
-    pde.dirichlet = zombie.Utils.get_dense_grid_dirichlet_callback(
-        dirichlet_buffer, dirichlet_shape, domain_min, domain_max,
-        dim=DIM, channels=CHANNELS)
-    pde.robin       = zombie.Core.get_constant_robin_callback(
-        0.0, dim=DIM, channels=CHANNELS)
-    pde.robin_coeff = zombie.Core.get_constant_robin_coefficient_callback(
-        0.0, dim=DIM)
-    pde.has_reflecting_boundary_conditions = \
-        zombie.Core.get_constant_indicator_callback(False, dim=DIM)
-    return pde
+    K = sp.csr_matrix((kvals, (rows, cols)), shape=(n_nodes, n_nodes))
+    M = sp.csr_matrix((mvals, (rows, cols)), shape=(n_nodes, n_nodes))
+    return K, M
 
-# ── Run WoS for one time step, return N_GRID × N_GRID solution grid ───────────
-def solve_step(pde, geometric_queries, xs, ys, walk_settings):
-    grid_pts = [(x, y) for y in ys for x in xs]   # row-major: y outer, x inner
+# ── Dirichlet boundary conditions ─────────────────────────────────────────────
+def get_dirichlet_nodes(x_coords, y_coords):
+    """Return {node_index: value} for all Dirichlet boundary nodes."""
+    tol = 1e-12
+    bc = {}
+    for idx, (x, y) in enumerate(zip(x_coords, y_coords)):
+        if abs(y - 1.0) < tol:
+            bc[idx] = 1.0           # top edge: u = 1
+        elif abs(y) < tol or abs(x) < tol or abs(x - 1.0) < tol:
+            bc[idx] = 0.0           # other edges: u = 0
+    return bc
 
-    sample_pts_list, sample_stats_list = [], []
-    for (x, y) in grid_pts:
-        pt    = np.array([x, y])
-        d_abs = geometric_queries.compute_dist_to_absorbing_boundary(pt, False)
-        d_ref = geometric_queries.compute_dist_to_reflecting_boundary(pt, False)
-        sp = zombie.Solvers.SamplePoint(
-            pt, np.zeros(DIM),
-            zombie.Solvers.SampleType.InDomain,
-            zombie.Solvers.EstimationQuantity.Solution,
-            1.0, d_abs, d_ref,
-            dim=DIM, channels=CHANNELS)
-        ss = zombie.Solvers.SampleStatistics(dim=DIM, channels=CHANNELS)
-        sample_pts_list.append(sp)
-        sample_stats_list.append(ss)
-
-    sample_pts   = zombie.Solvers.SamplePointList(
-        sample_pts_list,   dim=DIM, channels=CHANNELS)
-    sample_stats = zombie.Solvers.SampleStatisticsList(
-        sample_stats_list, dim=DIM, channels=CHANNELS)
-
-    n_walks_list    = zombie.IntList([N_WALKS] * len(grid_pts))
-    progress_bar    = zombie.Utils.ProgressBar(len(grid_pts))
-    report_progress = zombie.Utils.get_report_progress_callback(progress_bar)
-
-    solver = zombie.Solvers.WalkOnStars(geometric_queries, dim=DIM, channels=CHANNELS)
-    solver.solve(pde, walk_settings, n_walks_list, sample_pts, sample_stats,
-                 False, report_progress)
-    progress_bar.finish()
-
-    Z = np.zeros((N_GRID, N_GRID))
-    for idx in range(len(grid_pts)):
-        Z[idx // N_GRID, idx % N_GRID] = \
-            sample_stats[idx].get_estimated_solution()
-    return Z
+def apply_dirichlet_rows(A, bc_indices):
+    """
+    Replace rows for Dirichlet nodes with identity rows.
+    Columns are left intact so that the free-node equations automatically
+    account for the BC contribution in the RHS via b = M @ u_prev.
+    """
+    A_lil = A.tolil()
+    for idx in bc_indices:
+        A_lil[idx, :] = 0.0
+        A_lil[idx, idx] = 1.0
+    return A_lil.tocsr()
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 65)
-    print("  Transient heat equation – Zombie WalkOnStars (2D)")
-    print(f"  α = {ALPHA},   Δt = {DT},   σ = 1/(αΔt) = {SIGMA:.1f}")
-    print(f"  {N_STEPS} steps,   t_final = {N_STEPS * DT:.2f}")
-    print(f"  Grid: {N_GRID}×{N_GRID},   {N_WALKS} walks/point/step")
+    print("  Transient heat equation – FEM P1 triangles (2D)")
+    print(f"  α = {ALPHA},   Δt = {DT},   {N_STEPS} steps,   t_final = {N_STEPS * DT:.2f}")
+    n_nodes = (N_FEM + 1) ** 2
+    n_tri   = 2 * N_FEM ** 2
+    print(f"  Mesh: {N_FEM}×{N_FEM} squares → {n_tri} triangles,  {n_nodes} nodes")
     print("=" * 65)
 
-    domain_min = np.array([0.0, 0.0])
-    domain_max = np.array([1.0, 1.0])
+    # ── Build mesh, matrices, BCs ─────────────────────────────────────────────
+    x_coords, y_coords, triangles = build_mesh(N_FEM)
+    K, M = assemble(x_coords, y_coords, triangles)
+    bc = get_dirichlet_nodes(x_coords, y_coords)
 
-    dirichlet_buffer, dirichlet_shape = build_dirichlet_grid(res=128)
-    # Keep handlers alive — geometric_queries holds raw C++ pointers into them
-    geometric_queries, dirichlet_handler, neumann_handler = \
-        setup_geometry(domain_min, domain_max)
+    bc_indices = np.array(list(bc.keys()), dtype=np.int32)
+    bc_values  = np.array([bc[i] for i in bc_indices])
 
-    xs = np.linspace(0.0, 1.0, N_GRID + 2)[1:-1]
-    ys = np.linspace(0.0, 1.0, N_GRID + 2)[1:-1]
+    # System matrix A = M + α Δt K  (constant → factorise once)
+    A = M + ALPHA * DT * K
+    A_mod = apply_dirichlet_rows(A, bc_indices)
+    A_lu  = spla.splu(A_mod)
 
-    walk_settings = zombie.Solvers.WalkSettings(
-        EPS, EPS, EPS, 0.0, np.inf,
-        MAX_STEPS, 0, MAX_STEPS,
-        False, True, True, False,
-        False, True, True, False
-    )
+    # ── Initial condition: u = 0 on interior, BC values on boundary ───────────
+    u = np.zeros(n_nodes)
+    u[bc_indices] = bc_values
+    snapshots = {0: u.copy()}
 
     # ── Time loop ─────────────────────────────────────────────────────────────
-    u_current = np.zeros((N_GRID, N_GRID))   # IC: u(x, y, 0) = 0
-    snapshots = {0: u_current.copy()}
-
     for step in range(1, N_STEPS + 1):
-        print(f"\n--- Step {step:3d}/{N_STEPS}   t = {step * DT:.3f} ---")
-        pde       = build_pde(u_current, domain_min, domain_max,
-                              dirichlet_buffer, dirichlet_shape)
-        u_current = solve_step(pde, geometric_queries, xs, ys, walk_settings)
+        b = M @ u                          # RHS from previous step
+        b[bc_indices] = bc_values          # enforce Dirichlet in RHS
+        u = A_lu.solve(b)
         if step in SAVE_AT:
-            snapshots[step] = u_current.copy()
+            snapshots[step] = u.copy()
+        print(f"  step {step:3d}/{N_STEPS}   t = {step * DT:.3f}")
 
-    # ── Analytical solution and error at each saved step ─────────────────────
-    X, Y = np.meshgrid(xs, ys)
+    # ── Build evaluation grid for plotting ────────────────────────────────────
+    # node(i,j) = i*(N_FEM+1)+j  → reshape to (N_FEM+1, N_FEM+1) grid [i,j]
+    # For plotting: row=y, col=x → grid[j, i]
+    nn = N_FEM + 1
+    xi = np.linspace(0.0, 1.0, nn)        # x values (i-direction)
+    yj = np.linspace(0.0, 1.0, nn)        # y values (j-direction)
+    X, Y = np.meshgrid(xi, yj)            # shape (nn, nn), row=y, col=x
 
+    def solution_to_grid(u_vec):
+        """Reshape flat node vector to (nn, nn) grid [j, i]."""
+        grid = np.empty((nn, nn))
+        for i in range(nn):
+            for j in range(nn):
+                grid[j, i] = u_vec[i * nn + j]
+        return grid
+
+    # ── Error at final step ───────────────────────────────────────────────────
     t_final = N_STEPS * DT
-    Z_exact_final = np.vectorize(lambda x, y: u_exact(x, y, t_final))(X, Y)
-    err = np.abs(u_current - Z_exact_final)
+    Z_fem_final = solution_to_grid(snapshots[N_STEPS])
+    Z_ana_final = np.vectorize(u_exact)(X, Y, t_final)
+    err = np.abs(Z_fem_final - Z_ana_final)
     print(f"\nFinal (t={t_final:.2f}) vs analytical:  "
-          f"max_err = {err.max():.4f},  mean_err = {err.mean():.4f}")
+          f"max_err = {err.max():.5f},  mean_err = {err.mean():.5f}")
 
-    # ── Plot: WoS snapshots (top row) vs analytical (bottom row) ─────────────
+    # ── 2D contour plots: FEM (top) vs analytical (bottom) ───────────────────
     steps_to_plot = sorted(snapshots.keys())
     ncols = len(steps_to_plot)
 
@@ -290,21 +232,18 @@ def main():
 
     for col, step in enumerate(steps_to_plot):
         t_val = step * DT
-        Z_wos = snapshots[step]
-        Z_ana = np.vectorize(lambda x, y: u_exact(x, y, t_val))(X, Y)
+        Z_fem = solution_to_grid(snapshots[step])
+        Z_ana = np.vectorize(u_exact)(X, Y, t_val)
 
-        # Shared color range for this column: min/max across both solutions
-        vmin = float(min(Z_wos.min(), Z_ana.min()))
-        vmax = float(max(Z_wos.max(), Z_ana.max()))
+        vmin   = float(min(Z_fem.min(), Z_ana.min()))
+        vmax   = float(max(Z_fem.max(), Z_ana.max()))
         levels = np.linspace(vmin, vmax, 21)
 
-        # Top row: WoS solution
-        im = axes[0, col].contourf(X, Y, Z_wos, levels=levels, cmap="turbo")
+        im = axes[0, col].contourf(X, Y, Z_fem, levels=levels, cmap="turbo")
         plt.colorbar(im, ax=axes[0, col])
-        axes[0, col].set_title(f"WoS   t = {t_val:.2f}", fontsize=9)
+        axes[0, col].set_title(f"FEM   t = {t_val:.2f}", fontsize=9)
         axes[0, col].set_xlabel("x"); axes[0, col].set_ylabel("y")
 
-        # Bottom row: analytical solution
         im = axes[1, col].contourf(X, Y, Z_ana, levels=levels, cmap="turbo")
         plt.colorbar(im, ax=axes[1, col])
         axes[1, col].set_title(f"Analytical   t = {t_val:.2f}", fontsize=9)
@@ -312,35 +251,38 @@ def main():
 
     fig.suptitle(
         f"Transient heat  ∂u/∂t = α∇²u  on [0,1]²   |   u=1 top, u=0 elsewhere\n"
-        f"α = {ALPHA},   Δt = {DT},   σ = {SIGMA:.1f}   ({N_WALKS} walks/point)\n"
-        f"Top: Zombie WoS  |  Bottom: exact Fourier series",
+        f"α = {ALPHA},   Δt = {DT},   FEM P1 ({N_FEM}×{N_FEM} mesh)\n"
+        f"Top: FEM  |  Bottom: exact Fourier series",
         fontsize=11, y=1.01)
     plt.tight_layout()
 
-    out_path = os.path.join(os.path.dirname(__file__), "transient_solution.png")
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    out_2d = os.path.join(os.path.dirname(__file__), "fem_solution.png")
+    plt.savefig(out_2d, dpi=150, bbox_inches="tight")
     plt.show()
-    print(f"Saved → {out_path}")
+    print(f"Saved → {out_2d}")
 
-    # ── 1D comparison: one subplot per saved time step, u vs y at x=0.5 ───────
-    x_fixed  = 0.5
-    x_col    = int(np.argmin(np.abs(xs - x_fixed)))
-    x_actual = xs[x_col]
-    y_fine   = np.linspace(0.0, 1.0, 200)
+    # ── 1D profile: u vs y at x=0.5, one subplot per saved time step ─────────
+    x_fixed = 0.5
+    # Find the FEM nodes at x ≈ 0.5 (i-index closest to x=0.5)
+    i_fixed = int(round(x_fixed * N_FEM))
+    x_actual = i_fixed / N_FEM
+    j_indices = np.arange(nn)
+    y_nodes   = j_indices / N_FEM          # y values at those nodes
+
+    y_fine = np.linspace(0.0, 1.0, 300)
 
     ncols1d = len(steps_to_plot)
-    fig1d, axes1d = plt.subplots(1, ncols1d, figsize=(4 * ncols1d, 4),
-                                  sharey=True)
+    fig1d, axes1d = plt.subplots(1, ncols1d, figsize=(4 * ncols1d, 4), sharey=True)
 
     for ax, step in zip(axes1d, steps_to_plot):
         t_val = step * DT
-
-        u_wos = snapshots[step][:, x_col]
+        # FEM values along the vertical line x = x_actual
+        u_fem = np.array([snapshots[step][i_fixed * nn + j] for j in j_indices])
         u_ana = np.array([u_exact(x_actual, yv, t_val) for yv in y_fine])
 
         ax.plot(y_fine, u_ana, color="steelblue", lw=2, label="Analytical")
-        ax.plot(ys, u_wos, color="crimson", lw=0,
-                marker="o", ms=5, label="WoS")
+        ax.plot(y_nodes, u_fem, color="tomato", lw=1.5, marker="o",
+                ms=3, label="FEM")
 
         ax.set_title(f"t = {t_val:.2f}", fontsize=10)
         ax.set_xlabel("y", fontsize=10)
@@ -349,23 +291,85 @@ def main():
         ax.legend(fontsize=8)
 
     axes1d[0].set_ylabel(f"u(x={x_actual:.3f},  y,  t)", fontsize=10)
-
     fig1d.suptitle(
-        f"1D profile at x = {x_actual:.3f}  —  solid: analytical,  dots: WoS",
+        f"FEM 1D profile at x = {x_actual:.3f}  —  solid: analytical,  line+dots: FEM",
         fontsize=11)
     plt.tight_layout()
-    out_path_1d = os.path.join(os.path.dirname(__file__), "transient_1d_profile.png")
-    plt.savefig(out_path_1d, dpi=150, bbox_inches="tight")
-    plt.show()
-    print(f"Saved → {out_path_1d}")
 
-    # ── Save snapshots for comparison in example05 ────────────────────────────
-    save_dict = {'xs': xs, 'ys': ys, 'DT': np.float64(DT)}
-    for step in sorted(snapshots.keys()):
-        save_dict[f'step_{step}'] = snapshots[step]
-    out_npz = os.path.join(os.path.dirname(__file__), 'wos_snapshots.npz')
-    np.savez(out_npz, **save_dict)
-    print(f"WoS snapshots saved → {out_npz}")
+    out_1d = os.path.join(os.path.dirname(__file__), "fem_1d_profile.png")
+    plt.savefig(out_1d, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"Saved → {out_1d}")
+
+    # ── WoS vs FEM comparison (loads snapshots saved by example04) ───────────
+    wos_path = os.path.join(os.path.dirname(__file__), '..', 'example04', 'wos_snapshots.npz')
+    if not os.path.exists(wos_path):
+        print(f"WoS snapshots not found at {wos_path}. Run example04.py first.")
+        return
+
+    wos_data  = np.load(wos_path)
+    wos_dt    = float(wos_data['DT'])
+    wos_xs    = wos_data['xs']
+    wos_ys    = wos_data['ys']
+    wos_steps = sorted(int(k.split('_')[1])
+                       for k in wos_data.files if k.startswith('step_'))
+
+    # Run FEM at the same Δt and saved steps (separate from the main run above)
+    print(f"\nRunning FEM comparison at Δt={wos_dt} ...")
+    A_cmp     = M + ALPHA * wos_dt * K
+    A_cmp_mod = apply_dirichlet_rows(A_cmp, bc_indices)
+    A_cmp_lu  = spla.splu(A_cmp_mod)
+
+    u_cmp   = np.zeros(n_nodes)
+    u_cmp[bc_indices] = bc_values
+    fem_cmp = {0: u_cmp.copy()}
+    for step in range(1, max(wos_steps) + 1):
+        b = M @ u_cmp
+        b[bc_indices] = bc_values
+        u_cmp = A_cmp_lu.solve(b)
+        if step in wos_steps:
+            fem_cmp[step] = u_cmp.copy()
+        print(f"  FEM cmp step {step}/{max(wos_steps)}")
+
+    # 1D comparison plot — skip step 0 (trivially u=0)
+    plot_steps  = [s for s in wos_steps if s > 0]
+    ncols_cmp   = len(plot_steps)
+    x_cmp       = 0.5
+    i_cmp       = int(round(x_cmp * N_FEM))
+    x_a_cmp     = i_cmp / N_FEM
+    x_wos_col   = int(np.argmin(np.abs(wos_xs - x_cmp)))
+    sigma_cmp   = 1.0 / (ALPHA * wos_dt)
+
+    fig_cmp, axes_cmp = plt.subplots(1, ncols_cmp,
+                                      figsize=(4 * ncols_cmp, 4), sharey=True)
+
+    for ax, step in zip(axes_cmp, plot_steps):
+        t_val   = step * wos_dt
+        u_ana   = np.array([u_exact(x_a_cmp, yv, t_val) for yv in y_fine])
+        u_fem_l = np.array([fem_cmp[step][i_cmp * nn + j] for j in j_indices])
+        u_wos   = wos_data[f'step_{step}'][:, x_wos_col]
+
+        ax.plot(y_fine,  u_ana,   'k-',  lw=2,           label='Analytical')
+        ax.plot(y_nodes, u_fem_l, color='steelblue', lw=1.5,
+                marker='o', ms=3,                         label='FEM')
+        ax.plot(wos_ys,  u_wos,   'o',  color='tomato', ms=5, label='WoS')
+
+        ax.set_title(f't = {t_val:.2f}', fontsize=10)
+        ax.set_xlabel('y', fontsize=10)
+        ax.set_xlim(0, 1)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+    axes_cmp[0].set_ylabel(f'u(x={x_a_cmp:.3f},  y,  t)', fontsize=10)
+    fig_cmp.suptitle(
+        f'WoS (example04) vs FEM (example05) vs Analytical\n'
+        f'1D profile at x={x_a_cmp:.3f}  |  backward Euler  Δt={wos_dt},  σ={sigma_cmp:.1f}',
+        fontsize=11)
+    plt.tight_layout()
+    out_cmp = os.path.join(os.path.dirname(__file__), 'wos_vs_fem.png')
+    plt.savefig(out_cmp, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f'Saved → {out_cmp}')
 
 
 main()
